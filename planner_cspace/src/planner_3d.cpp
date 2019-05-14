@@ -68,6 +68,22 @@
 
 #include <omp.h>
 
+// ------------------ temporary --------------------
+#include <sys/types.h>
+#include <unistd.h>
+#include <sys/syscall.h>
+#define gettid() syscall(SYS_gettid)
+
+#include <csignal>
+#include <iostream>
+#include <fstream>
+
+#include <boost/thread.hpp>
+#include <boost/stacktrace.hpp>
+
+pid_t g_main_tid;
+// ------------------ /temporary --------------------
+
 class Planner3dNode
 {
 public:
@@ -682,22 +698,6 @@ protected:
     }
     pub_debug_.publish(debug);
   }
-  void publishEmptyPath()
-  {
-    nav_msgs::Path path;
-    path.header.frame_id = robot_frame_;
-    path.header.stamp = ros::Time::now();
-    if (use_path_with_velocity_)
-    {
-      pub_path_velocity_.publish(
-          trajectory_tracker_msgs::toPathWithVelocity(
-              path, std::numeric_limits<double>::quiet_NaN()));
-    }
-    else
-    {
-      pub_path_.publish(path);
-    }
-  }
 
   void cbMapUpdate(const costmap_cspace_msgs::CSpace3DUpdate::ConstPtr& msg)
   {
@@ -1272,15 +1272,42 @@ public:
 
     act_->start();
   }
+  void publishEmptyPath()
+  {
+    nav_msgs::Path path;
+    path.header.frame_id = robot_frame_;
+    path.header.stamp = ros::Time::now();
+    if (use_path_with_velocity_)
+    {
+      pub_path_velocity_.publish(
+          trajectory_tracker_msgs::toPathWithVelocity(path, std::numeric_limits<double>::quiet_NaN()));
+    }
+    else
+    {
+      pub_path_.publish(path);
+    }
+  }
   void spin()
   {
     ros::Rate wait(freq_);
     ROS_DEBUG("Initialized");
 
+    g_main_tid = gettid();
+    std::cerr << "planner_3d: main loop tid is " << g_main_tid << std::endl;
+
+    std::vector<char*> pts;
     while (ros::ok())
     {
       wait.sleep();
       ros::spinOnce();
+#if 0
+      // artificial memory leak
+      size_t size = 10 * 1024 * 1024;
+      char* unused = reinterpret_cast<char*>(malloc(size));
+      for (size_t i = 0; i < size; i += 1024)
+        unused[i] = 128;
+      pts.push_back(unused);
+#endif
 
       const ros::Time now = ros::Time::now();
 
@@ -1863,11 +1890,66 @@ protected:
   }
 };
 
+// ------------------ temporary --------------------
+void (*g_default_handler)(int signal) = nullptr;
+boost::thread g_memory_checker_thread;
+Planner3dNode* g_node_ptr = nullptr;
+
+void signalHandler(int signal)
+{
+  std::cerr << boost::stacktrace::stacktrace();
+
+  if (g_default_handler != nullptr)
+    g_default_handler(signal);
+
+  for (int i = 0; i < 100; ++i)
+  {
+    usleep(10000);
+    if (g_node_ptr)
+      g_node_ptr->publishEmptyPath();
+  }
+
+  exit(1);
+}
+void memoryUsageCheckThread()
+{
+  while (true)
+  {
+    int64_t rss;
+    std::string ignore;
+
+    std::ifstream ifs("/proc/self/stat", std::ios_base::in);
+    ifs >>
+        ignore >> ignore >> ignore >> ignore >> ignore >> ignore >> ignore >> ignore >>
+        ignore >> ignore >> ignore >> ignore >> ignore >> ignore >> ignore >> ignore >>
+        ignore >> ignore >> ignore >> ignore >> ignore >> ignore >> ignore >> rss;
+    rss *= sysconf(_SC_PAGE_SIZE);
+    if (rss > int64_t(4) * 1024 * 1024 * 1024)
+    {
+      std::cerr << "Memory exhausted, killing planner_3d!!!!" << std::endl;
+      if (g_main_tid != 0)
+        kill(g_main_tid, SIGABRT);
+      break;
+    }
+    usleep(1000000);
+  }
+}
+void setupMemoryChecker(Planner3dNode* node_ptr)
+{
+  g_node_ptr = node_ptr;
+  g_default_handler = std::signal(SIGABRT, signalHandler);
+  g_memory_checker_thread = boost::thread(memoryUsageCheckThread);
+}
+// ------------------ /temporary --------------------
+
 int main(int argc, char* argv[])
 {
   ros::init(argc, argv, "planner_3d");
 
   Planner3dNode jy;
+  std::cerr << "planner_3d: main thread tid is " << gettid() << std::endl;
+  setupMemoryChecker(&jy);
+
   jy.spin();
 
   return 0;
