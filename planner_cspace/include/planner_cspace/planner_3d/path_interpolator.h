@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, the neonavigation authors
+ * Copyright (c) 2019, the neonavigation authors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -10,8 +10,8 @@
  *     * Redistributions in binary form must reproduce the above copyright
  *       notice, this list of conditions and the following disclaimer in the
  *       documentation and/or other materials provided with the distribution.
- *     * Neither the name of the copyright holder nor the names of its 
- *       contributors may be used to endorse or promote products derived from 
+ *     * Neither the name of the copyright holder nor the names of its
+ *       contributors may be used to endorse or promote products derived from
  *       this software without specific prior written permission.
  *
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
@@ -27,49 +27,34 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef PLANNER_CSPACE_ROTATION_CACHE_H
-#define PLANNER_CSPACE_ROTATION_CACHE_H
+#ifndef PLANNER_CSPACE_PLANNER_3D_PATH_INTERPOLATOR_H
+#define PLANNER_CSPACE_PLANNER_3D_PATH_INTERPOLATOR_H
+
+#include <list>
 
 #include <planner_cspace/cyclic_vec.h>
+#include <planner_cspace/planner_3d/rotation_cache.h>
 
-template <int DIM, int NONCYCLIC>
-class RotationCache
+class PathInterpolator
 {
-protected:
-  std::unique_ptr<CyclicVecFloat<DIM, NONCYCLIC>[]> c_;
-  CyclicVecInt<DIM, NONCYCLIC> size_;
-  int ser_size_;
+private:
+  RotationCache rot_cache_;
+  int range_;
+  int angle_;
 
 public:
-  void reset(const CyclicVecInt<DIM, NONCYCLIC>& size)
+  inline void reset(
+      const float angular_resolution,
+      const int range)
   {
-    size_t ser_size = 1;
-    for (int i = 0; i < 3; i++)
-    {
-      ser_size *= size[i];
-    }
-    size_ = size;
-    ser_size_ = ser_size;
-
-    c_.reset(new CyclicVecFloat<DIM, NONCYCLIC>[ser_size]);
+    range_ = range;
+    angle_ = std::lround(M_PI * 2 / angular_resolution);
+    rot_cache_.reset(1.0, angular_resolution, range);
   }
-  explicit RotationCache(const CyclicVecInt<DIM, NONCYCLIC>& size)
-  {
-    reset(size);
-  }
-  RotationCache()
-  {
-  }
-  CyclicVecFloat<DIM, NONCYCLIC>& operator[](const CyclicVecInt<DIM, NONCYCLIC>& pos)
-  {
-    size_t addr = pos[2];
-    for (int i = 1; i >= 0; i--)
-    {
-      addr *= size_[i];
-      addr += pos[i];
-    }
-    return c_[addr];
-  }
+  std::list<CyclicVecFloat<3, 2>> interpolate(
+      const std::list<CyclicVecInt<3, 2>>& path_grid,
+      const float interval,
+      const int local_range) const;
 };
 
-#endif  // PLANNER_CSPACE_ROTATION_CACHE_H
+#endif  // PLANNER_CSPACE_PLANNER_3D_PATH_INTERPOLATOR_H
